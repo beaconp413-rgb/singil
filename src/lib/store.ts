@@ -181,6 +181,9 @@ export function save(data: Data) {
   localStorage.setItem(KEY, JSON.stringify(data));
 }
 
+/** Bring data from the cloud (possibly saved by an older app version) up to the current shape. */
+export const normalizeData = (raw: unknown): Data => migrate(raw);
+
 export function parseBackup(text: string): Data {
   const parsed = JSON.parse(text);
   if (!Array.isArray(parsed.units) || !Array.isArray(parsed.bills)) throw new Error("invalid");

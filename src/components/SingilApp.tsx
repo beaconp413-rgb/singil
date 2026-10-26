@@ -1,7 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { Session } from "@supabase/supabase-js";
+import QRCode from "qrcode";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCloud, type SyncState } from "./useCloud";
 import { renderBillImage } from "@/lib/billImage";
+import {
+  activeLink,
+  createLink,
+  disableLinks,
+  loadPhotos,
+  reviewProof,
+  sendLoginLink,
+  signOut,
+  tenantUrl,
+  type Proof,
+  type TenantLink,
+} from "@/lib/cloud";
 import { configure, currencySymbol, t } from "@/lib/i18n";
 import { deletePhotos, getPhotos, putPhoto, toSmallJpeg } from "@/lib/photos";
 import {
@@ -72,6 +87,11 @@ export default function SingilApp() {
   );
   const [view, setViewRaw] = useState<View>({ name: "home" });
   const [period, setPeriod] = useState(currentPeriod());
+  const replaceData = useCallback((d: Data) => {
+    save(d);
+    setData(d);
+  }, []);
+  const cloud = useCloud(data, replaceData);
 
   const setView = (v: View) => {
     setViewRaw(v);
@@ -130,10 +150,21 @@ export default function SingilApp() {
 
       <main className="mx-auto max-w-6xl space-y-4 p-4 md:p-6">
         {view.name === "home" && (
-          <Home data={data} period={period} setPeriod={setPeriod} unbilled={unbilled} setView={setView} update={update} />
+          <Home
+            data={data}
+            period={period}
+            setPeriod={setPeriod}
+            unbilled={unbilled}
+            setView={setView}
+            update={update}
+            proofs={cloud.proofs}
+            refreshProofs={cloud.refreshProofs}
+          />
         )}
 
-        {view.name === "unit" && <UnitDetail data={data} unitId={view.unitId} period={period} setView={setView} />}
+        {view.name === "unit" && (
+          <UnitDetail data={data} unitId={view.unitId} period={period} setView={setView} signedIn={!!cloud.session} />
+        )}
 
         {view.name === "editUnit" && (
           <UnitForm
@@ -231,6 +262,10 @@ export default function SingilApp() {
         {view.name === "settings" && (
           <SettingsForm
             data={data}
+            session={cloud.session}
+            syncState={cloud.syncState}
+            lastSync={cloud.lastSync}
+            onSyncNow={cloud.syncNow}
             onSave={(s) => {
               update((d) => withAutoBills({ ...d, settings: s }));
               home();
@@ -268,6 +303,8 @@ function Home({
   unbilled,
   setView,
   update,
+  proofs,
+  refreshProofs,
 }: {
   data: Data;
   period: string;
@@ -275,6 +312,8 @@ function Home({
   unbilled: Unit[];
   setView: (v: View) => void;
   update: Update;
+  proofs: Proof[];
+  refreshProofs: () => void;
 }) {
   const T = t();
   const monthBills = data.bills.filter((b) => b.period === period);
@@ -312,6 +351,8 @@ function Home({
           {T.unitsBilled(monthBills.length, data.units.length)} · {T.allTimeUnpaid}: <b className="text-red-700">{peso(allUnpaid)}</b>
         </p>
       </section>
+
+      <PaymentProofs data={data} proofs={proofs} update={update} refresh={refreshProofs} />
 
       <div className="grid grid-cols-1 gap-4 empty:hidden lg:grid-cols-2 lg:items-start">
       {autoBillsToReview(data).length > 0 && (
@@ -399,6 +440,90 @@ function Home({
   );
 }
 
+/** Payment screenshots sent by tenants through their invite link, waiting for the landlord. */
+function PaymentProofs({ data, proofs, update, refresh }: { data: Data; proofs: Proof[]; update: Update; refresh: () => void }) {
+  const T = t();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [enlarged, setEnlarged] = useState<string | null>(null);
+  if (proofs.length === 0) return null;
+
+  async function review(p: Proof, ok: boolean) {
+    if (!ok && !confirm(T.rejectQ)) return;
+    setBusy(p.id);
+    try {
+      await reviewProof(p.id, ok ? "confirmed" : "rejected");
+      if (ok) {
+        update((d) => ({
+          ...d,
+          bills: d.bills.map((b) =>
+            b.id === p.bill_id
+              ? { ...b, payments: [...b.payments, { id: uid(), amount: p.amount, date: p.created_at, note: `${T.proofNote}${p.note ? ` · ${p.note}` : ""}` }] }
+              : b,
+          ),
+        }));
+      }
+      refresh();
+    } catch {
+      alert(T.syncError);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="space-y-2 rounded-xl border border-emerald-300 bg-emerald-50 p-4">
+      <h2 className="font-semibold text-emerald-900">{T.paymentsToConfirm}</h2>
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+        {proofs.map((p) => {
+          const bill = data.bills.find((b) => b.id === p.bill_id);
+          const unit = data.units.find((u) => u.id === p.unit_id);
+          return (
+            <div key={p.id} className="flex gap-3 rounded-lg bg-white p-3">
+              {p.photo && (
+                <button onClick={() => setEnlarged(p.photo)} className="shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- tenant's uploaded screenshot */}
+                  <img src={p.photo} alt="Payment" className="h-20 w-16 rounded object-cover" />
+                </button>
+              )}
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="truncate font-medium">
+                  {unit?.name ?? T.deletedUnit} · {peso(p.amount)}
+                </p>
+                <p className="truncate text-xs text-slate-500">
+                  {bill ? periodLabel(bill.period) : ""} · {shortDate(p.created_at)}
+                  {p.note && ` · ${p.note}`}
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    disabled={busy === p.id}
+                    onClick={() => review(p, true)}
+                    className="flex-1 rounded-lg bg-emerald-700 py-2 text-sm font-medium text-white disabled:opacity-60"
+                  >
+                    {T.confirm}
+                  </button>
+                  <button
+                    disabled={busy === p.id}
+                    onClick={() => review(p, false)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-red-700 disabled:opacity-60"
+                  >
+                    {T.reject}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {enlarged && (
+        <button onClick={() => setEnlarged(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2">
+          {/* eslint-disable-next-line @next/next/no-img-element -- tenant's uploaded screenshot */}
+          <img src={enlarged} alt="Payment" className="max-h-full max-w-full object-contain" />
+        </button>
+      )}
+    </section>
+  );
+}
+
 /** Unpaid bills due within 5 days or overdue, each with a one-tap SMS reminder. */
 function Reminders({ data, setView, update }: { data: Data; setView: (v: View) => void; update: Update }) {
   const T = t();
@@ -456,7 +581,19 @@ function Reminders({ data, setView, update }: { data: Data; setView: (v: View) =
 
 /* ================= Unit detail: ledger for one unit ================= */
 
-function UnitDetail({ data, unitId, period, setView }: { data: Data; unitId: string; period: string; setView: (v: View) => void }) {
+function UnitDetail({
+  data,
+  unitId,
+  period,
+  setView,
+  signedIn,
+}: {
+  data: Data;
+  unitId: string;
+  period: string;
+  setView: (v: View) => void;
+  signedIn: boolean;
+}) {
   const T = t();
   const unit = data.units.find((u) => u.id === unitId);
   if (!unit) return <p>{T.unitNotFound}</p>;
@@ -539,6 +676,7 @@ function UnitDetail({ data, unitId, period, setView }: { data: Data; unitId: str
           )
         );
       })()}
+      <TenantLinkSection unit={unit} signedIn={signedIn} setView={setView} />
       </div>
 
       <div className="space-y-3">
@@ -550,6 +688,116 @@ function UnitDetail({ data, unitId, period, setView }: { data: Data; unitId: str
       </div>
       </div>
     </div>
+  );
+}
+
+/** Private invite link (and QR) that lets the tenant see their bills and send proof of payment. */
+function TenantLinkSection({ unit, signedIn, setView }: { unit: Unit; signedIn: boolean; setView: (v: View) => void }) {
+  const T = t();
+  const [link, setLink] = useState<TenantLink | null | undefined>(undefined); // undefined = loading
+  const [qr, setQr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const url = link ? tenantUrl(link.token) : "";
+
+  useEffect(() => {
+    if (!signedIn) return;
+    activeLink(unit.id)
+      .then(setLink)
+      .catch(() => setLink(null));
+  }, [signedIn, unit.id]);
+
+  useEffect(() => {
+    if (url) QRCode.toDataURL(url, { width: 320, margin: 1 }).then(setQr);
+  }, [url]);
+
+  if (!signedIn) {
+    return (
+      <section className="space-y-2 rounded-xl bg-white p-4 shadow-sm">
+        <h3 className="font-semibold">{T.tenantLink}</h3>
+        <p className="text-sm text-slate-600">{T.tenantLinkHelp}</p>
+        <button onClick={() => setView({ name: "settings" })} className="w-full rounded-lg border border-emerald-700 py-2.5 text-sm font-medium text-emerald-700">
+          {T.signInToInvite}
+        </button>
+      </section>
+    );
+  }
+
+  const message = T.inviteMessage(unit.tenantName.split(" ")[0], unit.name, url);
+
+  async function make() {
+    setBusy(true);
+    try {
+      await disableLinks(unit.id);
+      setLink(await createLink(unit.id));
+    } catch {
+      alert(T.syncError);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function turnOff() {
+    if (!confirm(T.disableQ)) return;
+    setBusy(true);
+    try {
+      await disableLinks(unit.id);
+      setLink(null);
+      setQr(null);
+    } catch {
+      alert(T.syncError);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (navigator.clipboard) await navigator.clipboard.writeText(message);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <section className="space-y-3 rounded-xl bg-white p-4 shadow-sm">
+      <h3 className="font-semibold">{T.tenantLink}</h3>
+      <p className="text-sm text-slate-600">{T.tenantLinkHelp}</p>
+      {link === undefined ? (
+        <p className="text-sm text-slate-400">…</p>
+      ) : link ? (
+        <>
+          <div className="flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element -- generated QR data URL */}
+            {qr && <img src={qr} alt="QR" className="h-28 w-28 shrink-0 rounded border border-slate-200" />}
+            <p className="min-w-0 break-all font-mono text-xs text-slate-700">{url}</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-sm">
+            {unit.phone ? (
+              <a href={`sms:${unit.phone.replace(/\s/g, "")}?body=${encodeURIComponent(message)}`} className="rounded-lg bg-slate-900 py-2.5 text-center font-medium text-white">
+                {T.smsLink}
+              </a>
+            ) : (
+              <span className="rounded-lg bg-slate-200 py-2.5 text-center text-slate-500">{T.noNumber}</span>
+            )}
+            <button
+              onClick={() => (navigator.share ? navigator.share({ text: message }).catch(() => {}) : copy())}
+              className="rounded-lg bg-blue-600 py-2.5 font-medium text-white"
+            >
+              {T.shareLink}
+            </button>
+            <button onClick={copy} className="rounded-lg border border-slate-300 py-2.5 font-medium">
+              {copied ? T.copied : T.copyLink}
+            </button>
+          </div>
+          <button disabled={busy} onClick={turnOff} className="w-full py-1 text-sm text-red-700 disabled:opacity-60">
+            {T.disableLink}
+          </button>
+        </>
+      ) : (
+        <button disabled={busy} onClick={make} className="w-full rounded-lg bg-emerald-700 py-3 font-medium text-white disabled:opacity-60">
+          {busy ? T.saving : T.createLink}
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -686,7 +934,7 @@ function useLoadRowPhotos(rows: BillRow[], setRows: (fn: (r: BillRow[]) => BillR
   const key = rows.flatMap((r) => (r.photoId && !r.photo ? [r.photoId] : [])).join(",");
   useEffect(() => {
     if (!key) return;
-    getPhotos(key.split(",")).then((found) =>
+    loadPhotos(key.split(",")).then((found) =>
       setRows((rs) => rs.map((r) => (r.photoId && !r.photo && found[r.photoId] ? { ...r, photo: found[r.photoId] } : r))),
     );
   }, [key, setRows]);
@@ -977,7 +1225,7 @@ function BillView({
   const [imgBusy, setImgBusy] = useState(false);
   const photoKey = bill ? linePhotoIds(bill).join(",") : "";
   useEffect(() => {
-    if (photoKey) getPhotos(photoKey.split(",")).then(setPhotos);
+    if (photoKey) loadPhotos(photoKey.split(",")).then(setPhotos);
   }, [photoKey]);
   if (!bill || !unit) return <p>{T.billNotFound}</p>;
 
@@ -1292,7 +1540,23 @@ function History({ data, setView }: { data: Data; setView: (v: View) => void }) 
 
 /* ================= Settings ================= */
 
-function SettingsForm({ data, onSave, onImport }: { data: Data; onSave: (s: Settings) => void; onImport: (d: Data) => void }) {
+function SettingsForm({
+  data,
+  session,
+  syncState,
+  lastSync,
+  onSyncNow,
+  onSave,
+  onImport,
+}: {
+  data: Data;
+  session: Session | null;
+  syncState: SyncState;
+  lastSync: string | null;
+  onSyncNow: () => void;
+  onSave: (s: Settings) => void;
+  onImport: (d: Data) => void;
+}) {
   const [s, setS] = useState<Settings>(data.settings);
   // Preview the chosen language while editing, before it is saved.
   configure(s);
@@ -1361,6 +1625,8 @@ function SettingsForm({ data, onSave, onImport }: { data: Data; onSave: (s: Sett
         </button>
       </form>
 
+      <AccountSection session={session} syncState={syncState} lastSync={lastSync} onSyncNow={onSyncNow} />
+
       <section className="space-y-2 rounded-xl bg-white p-4 shadow-sm">
         <h3 className="font-semibold">{T.backup}</h3>
         <p className="text-xs text-slate-500">{T.backupHelp}</p>
@@ -1373,6 +1639,78 @@ function SettingsForm({ data, onSave, onImport }: { data: Data; onSave: (s: Sett
         </label>
       </section>
     </div>
+  );
+}
+
+function AccountSection({
+  session,
+  syncState,
+  lastSync,
+  onSyncNow,
+}: {
+  session: Session | null;
+  syncState: SyncState;
+  lastSync: string | null;
+  onSyncNow: () => void;
+}) {
+  const T = t();
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function send() {
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) return;
+    setBusy(true);
+    try {
+      await sendLoginLink(email.trim());
+      setSent(email.trim());
+    } catch (e) {
+      alert(e instanceof Error ? e.message : T.syncError);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3 rounded-xl bg-white p-4 shadow-sm">
+      <h3 className="font-semibold">{T.account}</h3>
+      {session ? (
+        <>
+          <p className="text-sm">{T.signedInAs(session.user.email ?? "")}</p>
+          <p className={`text-xs ${syncState === "error" ? "text-red-700" : "text-slate-500"}`}>
+            {syncState === "syncing" ? T.syncing : syncState === "error" ? T.syncError : lastSync ? T.lastSynced(shortDate(lastSync)) : ""}
+          </p>
+          <div className="flex gap-2">
+            <button onClick={onSyncNow} className="flex-1 rounded-lg border border-slate-300 py-2.5 text-sm font-medium">
+              {T.syncNow}
+            </button>
+            <button onClick={() => signOut()} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-red-700">
+              {T.signOut}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500">{T.accountHelp}</p>
+          {sent ? (
+            <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{T.linkSent(sent)}</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="email"
+                value={email}
+                placeholder={T.email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="min-w-[12rem] flex-1 rounded-lg border border-slate-300 px-3 py-2"
+              />
+              <button disabled={busy} onClick={send} className="rounded-lg bg-emerald-700 px-4 py-2 font-medium text-white disabled:opacity-60">
+                {T.sendLink}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

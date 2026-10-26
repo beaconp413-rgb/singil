@@ -17,11 +17,24 @@ and produces a bill image to send by SMS or Messenger.
 - **Bill image** with the exact amount to pay, payment details, deposit (information only) and the bill photos.
 - **English / Filipino**, **₱ / $**, any payment method (GCash, Maya, Venmo, Zelle…).
 - Works on phones and tablets; can be added to the home screen.
+- **Landlord account & sync** (optional): sign in by email link to back up online and use several devices.
+- **Tenant invite links:** each tenant gets a private link + QR (`?t=TOKEN`). Without an account they see their
+  amount to pay, bill photos and history, and upload a payment screenshot. The landlord confirms or rejects it
+  under "Payments to confirm"; confirmed payments are recorded on the bill. Links can be turned off anytime.
 
 ## How data is stored
 
-Everything lives in the browser on the landlord's device: bills and settings in `localStorage`, photos in IndexedDB.
-Nothing is sent to a server. Settings → Backup downloads a JSON backup (photos included). Each device has its own data.
+Local-first: the app works offline with data in `localStorage` and photos in IndexedDB.
+When the landlord signs in, data and photos sync to Supabase (project `singil`, Singapore):
+
+| Table | Who can access |
+|---|---|
+| `landlord_data` (the app's JSON), `photos`, `tenant_links` | Only the signed-in landlord who owns the row (RLS) |
+| `payment_proofs` | Landlord reads/reviews own; tenants insert only via `submit_payment_proof()` |
+
+Tenants are anonymous: `get_tenant_view(token)`, `get_tenant_photos(token)` and `submit_payment_proof(...)` are
+`SECURITY DEFINER` functions that return/accept data for the token's unit only (no other tenants, phone numbers
+or notes). Schema: `supabase/migrations/`. The publishable key in `src/lib/supabaseConfig.ts` is public by design.
 
 ## Development
 
@@ -46,7 +59,8 @@ Every push to `main` builds the static site and publishes it to GitHub Pages
 
 ## Roadmap
 
-- Online sync (Supabase) with landlord login and a private link per tenant to see their bill and upload proof of payment
-- Automatic SMS/email reminders to tenants
+- Custom email sender (e.g. Resend) so any landlord can receive login emails (Supabase's built-in sender only
+  reaches the project's own team, ~2 emails/hour)
+- Server-side monthly bill creation + automatic SMS/email reminders to tenants
 - Payment receipts, move-out & deposit settlement, rent-increase checker (RA 9653), late fees, demand letter,
   expenses & profit report, repair log, multiple properties
