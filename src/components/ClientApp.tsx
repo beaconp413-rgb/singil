@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 // Singil keeps the landlord's data on the device (plus optional cloud sync), so there is
 // nothing to render on the server — load it in the browser only.
@@ -11,6 +11,13 @@ const SingilApp = dynamic(() => import("./SingilApp"), { ssr: false });
 const readOldInvite = () => new URLSearchParams(window.location.search).has("t");
 
 export default function ClientApp() {
+  // Offline support for the installed app (and the Android APK).
+  useEffect(() => {
+    const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+      navigator.serviceWorker.register(`${base}/sw.js`, { scope: `${base}/` }).catch(() => {});
+    }
+  }, []);
   // undefined during server render/hydration, then the real value in the browser.
   const oldInvite = useSyncExternalStore(
     () => () => {},

@@ -3,8 +3,9 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Singil — Paupahan Billing",
-  description: "Kunan ng litrato ang metro, i-compute ang singil, i-send sa tenant.",
+  description: "Singil ng upa at bills para sa paupahan — awtomatiko buwan-buwan, i-send sa tenant.",
   manifest: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/manifest.webmanifest`,
+  icons: { icon: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/icon-192.png`, apple: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/apple-touch-icon.png` },
   appleWebApp: { capable: true, title: "Singil", statusBarStyle: "default" },
 };
 
