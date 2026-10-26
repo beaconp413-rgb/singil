@@ -1,36 +1,52 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Singil — rent & bills for small landlords
 
-## Getting Started
+Singil helps landlords with a few units (paupahan, boarding houses, apartments) bill tenants every month.
+The landlord sets up each tenant profile once; the app creates the monthly bill, reminds before the due date,
+and produces a bill image to send by SMS or Messenger.
 
-First, run the development server:
+**Live app:** https://beaconp413-rgb.github.io/singil/
+
+## Features
+
+- **Tenant profile:** rent, monthly bills (label + cost + photo of the bill, e.g. Kuryente ₱1,000), deposit, move-in date.
+- **Automatic monthly bills:** due on the move-in day of each month (moved in Oct 27 → due Nov 27); each bill is created
+  7 days before its due date (configurable). Never bills before the move-in date. Missed days catch up when the app opens.
+- **Edit any bill** after it was created (amounts, photos, due date); payments already recorded are kept.
+- **Payments:** partial payments, balances carried to the next month, statuses (paid / partial / unpaid / overdue).
+- **Reminders:** unpaid bills due within 5 days or overdue, with a one-tap prefilled SMS.
+- **Bill image** with the exact amount to pay, payment details, deposit (information only) and the bill photos.
+- **English / Filipino**, **₱ / $**, any payment method (GCash, Maya, Venmo, Zelle…).
+- Works on phones and tablets; can be added to the home screen.
+
+## How data is stored
+
+Everything lives in the browser on the landlord's device: bills and settings in `localStorage`, photos in IndexedDB.
+Nothing is sent to a server. Settings → Backup downloads a JSON backup (photos included). Each device has its own data.
+
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev          # http://localhost:3000
+npm run build        # static export to ./out
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| File | What it does |
+|---|---|
+| `src/components/SingilApp.tsx` | All screens (home, tenant profile, bill, payments, settings) |
+| `src/lib/store.ts` | Data model, money math, due dates, automatic bills, reminders, migrations |
+| `src/lib/i18n.ts` | English / Filipino text and currency formatting |
+| `src/lib/billImage.ts` | Renders the shareable bill image |
+| `src/lib/photos.ts` | Photo storage (IndexedDB) and resizing |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Every push to `main` builds the static site and publishes it to GitHub Pages
+(`.github/workflows/deploy.yml`). The workflow sets `PAGES_BASE_PATH=/<repo-name>`.
 
-## Learn More
+## Roadmap
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Online sync (Supabase) with landlord login and a private link per tenant to see their bill and upload proof of payment
+- Automatic SMS/email reminders to tenants
+- Payment receipts, move-out & deposit settlement, rent-increase checker (RA 9653), late fees, demand letter,
+  expenses & profit report, repair log, multiple properties

@@ -1,0 +1,9 @@
+{
+  "name": "Singil — Paupahan Billing",
+  "short_name": "Singil",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#047857",
+  "icons": [{ "src": "favicon.ico", "sizes": "any", "type": "image/x-icon" }]
+}
