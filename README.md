@@ -4,7 +4,7 @@ Singil helps landlords with a few units (paupahan, boarding houses, apartments) 
 The landlord sets up each tenant profile once; the app creates the monthly bill, reminds before the due date,
 and produces a bill image to send by SMS or Messenger.
 
-**Live app:** https://beaconp413-rgb.github.io/singil/
+**Live app:** https://beaconp413-rgb.github.io/singil/ · **Android app (APK):** https://beaconp413-rgb.github.io/Singil.apk
 
 ## Features
 
@@ -50,8 +50,16 @@ npm run build        # static export to ./out
 Every push to `main` builds the static site and publishes it to GitHub Pages
 (`.github/workflows/deploy.yml`). The workflow sets `PAGES_BASE_PATH=/<repo-name>`.
 
+## Android app
+
+`../singil-android` is a Trusted Web Activity (Bubblewrap), package `ph.singil.app`. It opens the live site full
+screen in Chrome, so website updates reach the app without a reinstall. The repo `beaconp413-rgb.github.io` serves
+`/.well-known/assetlinks.json` (needed for full screen) and the APK download. Rebuild steps are in that folder's README.
+The site works offline through `public/sw.js`.
+
 ## Roadmap
 
+- Google Play: $25 account, closed test with 12 testers for 14 days, then upload `app-release-bundle.aab`
 - Custom email sender (e.g. Resend) so any landlord can receive login emails (Supabase's built-in sender only
   reaches the project's own team, ~2 emails/hour)
 - Server-side monthly bill creation + automatic email reminders to tenants
