@@ -34,6 +34,7 @@ export type Unit = {
   name: string;
   tenantName: string;
   phone: string;
+  email?: string; // for sending the bill by email
   rent: number;
   electric: MeterConfig; // .enabled = unit pays an electric bill
   water: MeterConfig;

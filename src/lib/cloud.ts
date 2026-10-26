@@ -1,9 +1,9 @@
-// Supabase: landlord sign-in and sync, tenant invite links, tenant view, payment proofs.
-// The app still works fully offline without an account; signing in adds sync + tenant links.
+// Supabase: landlord sign-in and sync across devices.
+// The app works fully offline without an account; signing in adds online backup + sync.
 
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import { getPhoto, putPhoto } from "./photos";
-import type { Bill, Data, Settings, Unit } from "./store";
+import type { Data } from "./store";
 import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL } from "./supabaseConfig";
 
 let client: SupabaseClient | null = null;
@@ -54,7 +54,7 @@ export async function pushData(data: Data): Promise<string> {
   return updatedAt;
 }
 
-/** Every photo the landlord's bills and profiles use, so tenants and other devices can see them. */
+/** Every photo the landlord's bills and profiles use, so the landlord's other devices can see them. */
 const referencedPhotoIds = (d: Data) => [
   ...new Set([
     ...d.bills.flatMap((b) => b.lines.flatMap((l) => [l.photoId, l.billPhotoId].filter((x): x is string => !!x))),
@@ -97,109 +97,4 @@ export async function loadPhotos(ids: string[]): Promise<Record<string, string>>
     }
   }
   return out;
-}
-
-/* ---------- tenant invite links ---------- */
-
-export type TenantLink = { token: string; unit_id: string; active: boolean; created_at: string };
-
-const randomToken = () => {
-  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L confusion
-  const bytes = crypto.getRandomValues(new Uint8Array(20));
-  return [...bytes].map((b) => alphabet[b % alphabet.length]).join("");
-};
-
-export const tenantUrl = (token: string) => `${appUrl()}?t=${token}`;
-
-export async function activeLink(unitId: string): Promise<TenantLink | null> {
-  const { data, error } = await sb()
-    .from("tenant_links")
-    .select("token, unit_id, active, created_at")
-    .eq("unit_id", unitId)
-    .eq("active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data as TenantLink | null;
-}
-
-export async function createLink(unitId: string): Promise<TenantLink> {
-  const { data, error } = await sb()
-    .from("tenant_links")
-    .insert({ token: randomToken(), unit_id: unitId })
-    .select("token, unit_id, active, created_at")
-    .single();
-  if (error) throw error;
-  return data as TenantLink;
-}
-
-export async function disableLinks(unitId: string) {
-  const { error } = await sb().from("tenant_links").update({ active: false }).eq("unit_id", unitId).eq("active", true);
-  if (error) throw error;
-}
-
-/* ---------- payment proofs ---------- */
-
-export type Proof = {
-  id: string;
-  unit_id: string;
-  bill_id: string;
-  amount: number;
-  note: string | null;
-  photo: string | null;
-  status: "pending" | "confirmed" | "rejected";
-  created_at: string;
-};
-
-export async function pendingProofs(): Promise<Proof[]> {
-  const { data, error } = await sb()
-    .from("payment_proofs")
-    .select("id, unit_id, bill_id, amount, note, photo, status, created_at")
-    .eq("status", "pending")
-    .order("created_at");
-  if (error) throw error;
-  return (data ?? []).map((p) => ({ ...p, amount: Number(p.amount) })) as Proof[];
-}
-
-export async function reviewProof(id: string, status: "confirmed" | "rejected") {
-  const { error } = await sb()
-    .from("payment_proofs")
-    .update({ status, reviewed_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------- tenant (anonymous, by invite token) ---------- */
-
-export type TenantView = {
-  settings: Pick<Settings, "propertyName" | "paymentMethod" | "gcashNumber" | "gcashName" | "language" | "currency">;
-  unit: Pick<Unit, "name" | "tenantName" | "deposit">;
-  bills: Bill[];
-  proofs: { id: string; billId: string; amount: number; note: string | null; status: Proof["status"]; createdAt: string }[];
-};
-
-export async function getTenantView(token: string): Promise<TenantView | null> {
-  const { data, error } = await sb().rpc("get_tenant_view", { p_token: token });
-  if (error) throw error;
-  if (!data) return null;
-  const v = data as TenantView;
-  return { ...v, proofs: v.proofs.map((p) => ({ ...p, amount: Number(p.amount) })) };
-}
-
-export async function getTenantPhotos(token: string): Promise<Record<string, string>> {
-  const { data, error } = await sb().rpc("get_tenant_photos", { p_token: token });
-  if (error) throw error;
-  return (data ?? {}) as Record<string, string>;
-}
-
-export async function submitProof(token: string, billId: string, amount: number, note: string, photo: string | null) {
-  const { error } = await sb().rpc("submit_payment_proof", {
-    p_token: token,
-    p_bill_id: billId,
-    p_amount: amount,
-    p_note: note,
-    p_photo: photo,
-  });
-  if (error) throw error;
 }

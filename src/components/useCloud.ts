@@ -2,7 +2,7 @@
 
 import type { Session } from "@supabase/supabase-js";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onSession, pendingProofs, pullData, pushData, type Proof } from "@/lib/cloud";
+import { onSession, pullData, pushData } from "@/lib/cloud";
 import { t } from "@/lib/i18n";
 import { type Data, normalizeData, withAutoBills } from "@/lib/store";
 
@@ -22,7 +22,6 @@ export function useCloud(data: Data, replaceData: (d: Data) => void) {
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<SyncState>("off");
   const [lastSync, setLastSync] = useState<string | null>(() => localStorage.getItem(VERSION));
-  const [proofs, setProofs] = useState<Proof[]>([]);
   const userId = session?.user.id;
   const ready = useRef(false); // initial reconciliation finished for this user
   const skipPush = useRef(false); // data was just replaced from the cloud
@@ -121,40 +120,22 @@ export function useCloud(data: Data, replaceData: (d: Data) => void) {
     return () => clearTimeout(timer);
   }, [data, userId, push]);
 
-  // Payment proofs from tenants: on sign-in, every minute, and when the app comes back to the foreground.
-  const refreshProofs = useCallback(async () => {
-    if (!userId) return;
-    try {
-      setProofs(await pendingProofs());
-    } catch {
-      /* offline — keep the last list */
-    }
-  }, [userId]);
-
   useEffect(() => {
     if (!userId) return;
-    const first = setTimeout(refreshProofs, 0);
-    const timer = setInterval(refreshProofs, 60_000);
+    // Pick up changes made on another device when the app comes back to the foreground.
     const onVisible = () => {
       if (document.visibilityState === "visible") {
-        refreshProofs();
         if (localStorage.getItem(DIRTY) !== "1") reconcile(userId);
       }
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearTimeout(first);
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [userId, refreshProofs, reconcile]);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [userId, reconcile]);
 
   return {
     session,
     syncState: userId ? state : ("off" as SyncState),
     lastSync,
     syncNow: () => userId && reconcile(userId),
-    proofs,
-    refreshProofs,
   };
 }

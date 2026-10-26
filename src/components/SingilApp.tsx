@@ -1,22 +1,10 @@
 "use client";
 
 import type { Session } from "@supabase/supabase-js";
-import QRCode from "qrcode";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useCloud, type SyncState } from "./useCloud";
 import { renderBillImage } from "@/lib/billImage";
-import {
-  activeLink,
-  createLink,
-  disableLinks,
-  loadPhotos,
-  reviewProof,
-  sendLoginLink,
-  signOut,
-  tenantUrl,
-  type Proof,
-  type TenantLink,
-} from "@/lib/cloud";
+import { loadPhotos, sendLoginLink, signOut } from "@/lib/cloud";
 import { configure, currencySymbol, t } from "@/lib/i18n";
 import { deletePhotos, getPhotos, putPhoto, toSmallJpeg } from "@/lib/photos";
 import {
@@ -157,13 +145,11 @@ export default function SingilApp() {
             unbilled={unbilled}
             setView={setView}
             update={update}
-            proofs={cloud.proofs}
-            refreshProofs={cloud.refreshProofs}
           />
         )}
 
         {view.name === "unit" && (
-          <UnitDetail data={data} unitId={view.unitId} period={period} setView={setView} signedIn={!!cloud.session} />
+          <UnitDetail data={data} unitId={view.unitId} period={period} setView={setView} />
         )}
 
         {view.name === "editUnit" && (
@@ -303,8 +289,6 @@ function Home({
   unbilled,
   setView,
   update,
-  proofs,
-  refreshProofs,
 }: {
   data: Data;
   period: string;
@@ -312,8 +296,6 @@ function Home({
   unbilled: Unit[];
   setView: (v: View) => void;
   update: Update;
-  proofs: Proof[];
-  refreshProofs: () => void;
 }) {
   const T = t();
   const monthBills = data.bills.filter((b) => b.period === period);
@@ -351,8 +333,6 @@ function Home({
           {T.unitsBilled(monthBills.length, data.units.length)} · {T.allTimeUnpaid}: <b className="text-red-700">{peso(allUnpaid)}</b>
         </p>
       </section>
-
-      <PaymentProofs data={data} proofs={proofs} update={update} refresh={refreshProofs} />
 
       <div className="grid grid-cols-1 gap-4 empty:hidden lg:grid-cols-2 lg:items-start">
       {autoBillsToReview(data).length > 0 && (
@@ -440,90 +420,6 @@ function Home({
   );
 }
 
-/** Payment screenshots sent by tenants through their invite link, waiting for the landlord. */
-function PaymentProofs({ data, proofs, update, refresh }: { data: Data; proofs: Proof[]; update: Update; refresh: () => void }) {
-  const T = t();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [enlarged, setEnlarged] = useState<string | null>(null);
-  if (proofs.length === 0) return null;
-
-  async function review(p: Proof, ok: boolean) {
-    if (!ok && !confirm(T.rejectQ)) return;
-    setBusy(p.id);
-    try {
-      await reviewProof(p.id, ok ? "confirmed" : "rejected");
-      if (ok) {
-        update((d) => ({
-          ...d,
-          bills: d.bills.map((b) =>
-            b.id === p.bill_id
-              ? { ...b, payments: [...b.payments, { id: uid(), amount: p.amount, date: p.created_at, note: `${T.proofNote}${p.note ? ` · ${p.note}` : ""}` }] }
-              : b,
-          ),
-        }));
-      }
-      refresh();
-    } catch {
-      alert(T.syncError);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  return (
-    <section className="space-y-2 rounded-xl border border-emerald-300 bg-emerald-50 p-4">
-      <h2 className="font-semibold text-emerald-900">{T.paymentsToConfirm}</h2>
-      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-        {proofs.map((p) => {
-          const bill = data.bills.find((b) => b.id === p.bill_id);
-          const unit = data.units.find((u) => u.id === p.unit_id);
-          return (
-            <div key={p.id} className="flex gap-3 rounded-lg bg-white p-3">
-              {p.photo && (
-                <button onClick={() => setEnlarged(p.photo)} className="shrink-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- tenant's uploaded screenshot */}
-                  <img src={p.photo} alt="Payment" className="h-20 w-16 rounded object-cover" />
-                </button>
-              )}
-              <div className="min-w-0 flex-1 space-y-1">
-                <p className="truncate font-medium">
-                  {unit?.name ?? T.deletedUnit} · {peso(p.amount)}
-                </p>
-                <p className="truncate text-xs text-slate-500">
-                  {bill ? periodLabel(bill.period) : ""} · {shortDate(p.created_at)}
-                  {p.note && ` · ${p.note}`}
-                </p>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    disabled={busy === p.id}
-                    onClick={() => review(p, true)}
-                    className="flex-1 rounded-lg bg-emerald-700 py-2 text-sm font-medium text-white disabled:opacity-60"
-                  >
-                    {T.confirm}
-                  </button>
-                  <button
-                    disabled={busy === p.id}
-                    onClick={() => review(p, false)}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-red-700 disabled:opacity-60"
-                  >
-                    {T.reject}
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {enlarged && (
-        <button onClick={() => setEnlarged(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2">
-          {/* eslint-disable-next-line @next/next/no-img-element -- tenant's uploaded screenshot */}
-          <img src={enlarged} alt="Payment" className="max-h-full max-w-full object-contain" />
-        </button>
-      )}
-    </section>
-  );
-}
-
 /** Unpaid bills due within 5 days or overdue, each with a one-tap SMS reminder. */
 function Reminders({ data, setView, update }: { data: Data; setView: (v: View) => void; update: Update }) {
   const T = t();
@@ -564,6 +460,7 @@ function Reminders({ data, setView, update }: { data: Data; setView: (v: View) =
               <button
                 onClick={async () => {
                   if (navigator.share) await navigator.share({ text: msg }).catch(() => {});
+                  else if (await copyText(msg)) alert(T.copiedPaste);
                   markReminded(b.id);
                 }}
                 className="shrink-0 rounded-lg bg-amber-500 px-3 py-2 text-sm font-medium text-white"
@@ -586,13 +483,11 @@ function UnitDetail({
   unitId,
   period,
   setView,
-  signedIn,
 }: {
   data: Data;
   unitId: string;
   period: string;
   setView: (v: View) => void;
-  signedIn: boolean;
 }) {
   const T = t();
   const unit = data.units.find((u) => u.id === unitId);
@@ -676,7 +571,6 @@ function UnitDetail({
           )
         );
       })()}
-      <TenantLinkSection unit={unit} signedIn={signedIn} setView={setView} />
       </div>
 
       <div className="space-y-3">
@@ -688,116 +582,6 @@ function UnitDetail({
       </div>
       </div>
     </div>
-  );
-}
-
-/** Private invite link (and QR) that lets the tenant see their bills and send proof of payment. */
-function TenantLinkSection({ unit, signedIn, setView }: { unit: Unit; signedIn: boolean; setView: (v: View) => void }) {
-  const T = t();
-  const [link, setLink] = useState<TenantLink | null | undefined>(undefined); // undefined = loading
-  const [qr, setQr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const url = link ? tenantUrl(link.token) : "";
-
-  useEffect(() => {
-    if (!signedIn) return;
-    activeLink(unit.id)
-      .then(setLink)
-      .catch(() => setLink(null));
-  }, [signedIn, unit.id]);
-
-  useEffect(() => {
-    if (url) QRCode.toDataURL(url, { width: 320, margin: 1 }).then(setQr);
-  }, [url]);
-
-  if (!signedIn) {
-    return (
-      <section className="space-y-2 rounded-xl bg-white p-4 shadow-sm">
-        <h3 className="font-semibold">{T.tenantLink}</h3>
-        <p className="text-sm text-slate-600">{T.tenantLinkHelp}</p>
-        <button onClick={() => setView({ name: "settings" })} className="w-full rounded-lg border border-emerald-700 py-2.5 text-sm font-medium text-emerald-700">
-          {T.signInToInvite}
-        </button>
-      </section>
-    );
-  }
-
-  const message = T.inviteMessage(unit.tenantName.split(" ")[0], unit.name, url);
-
-  async function make() {
-    setBusy(true);
-    try {
-      await disableLinks(unit.id);
-      setLink(await createLink(unit.id));
-    } catch {
-      alert(T.syncError);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function turnOff() {
-    if (!confirm(T.disableQ)) return;
-    setBusy(true);
-    try {
-      await disableLinks(unit.id);
-      setLink(null);
-      setQr(null);
-    } catch {
-      alert(T.syncError);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function copy() {
-    if (navigator.clipboard) await navigator.clipboard.writeText(message);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  return (
-    <section className="space-y-3 rounded-xl bg-white p-4 shadow-sm">
-      <h3 className="font-semibold">{T.tenantLink}</h3>
-      <p className="text-sm text-slate-600">{T.tenantLinkHelp}</p>
-      {link === undefined ? (
-        <p className="text-sm text-slate-400">…</p>
-      ) : link ? (
-        <>
-          <div className="flex items-center gap-3">
-            {/* eslint-disable-next-line @next/next/no-img-element -- generated QR data URL */}
-            {qr && <img src={qr} alt="QR" className="h-28 w-28 shrink-0 rounded border border-slate-200" />}
-            <p className="min-w-0 break-all font-mono text-xs text-slate-700">{url}</p>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
-            {unit.phone ? (
-              <a href={`sms:${unit.phone.replace(/\s/g, "")}?body=${encodeURIComponent(message)}`} className="rounded-lg bg-slate-900 py-2.5 text-center font-medium text-white">
-                {T.smsLink}
-              </a>
-            ) : (
-              <span className="rounded-lg bg-slate-200 py-2.5 text-center text-slate-500">{T.noNumber}</span>
-            )}
-            <button
-              onClick={() => (navigator.share ? navigator.share({ text: message }).catch(() => {}) : copy())}
-              className="rounded-lg bg-blue-600 py-2.5 font-medium text-white"
-            >
-              {T.shareLink}
-            </button>
-            <button onClick={copy} className="rounded-lg border border-slate-300 py-2.5 font-medium">
-              {copied ? T.copied : T.copyLink}
-            </button>
-          </div>
-          <button disabled={busy} onClick={turnOff} className="w-full py-1 text-sm text-red-700 disabled:opacity-60">
-            {T.disableLink}
-          </button>
-        </>
-      ) : (
-        <button disabled={busy} onClick={make} className="w-full rounded-lg bg-emerald-700 py-3 font-medium text-white disabled:opacity-60">
-          {busy ? T.saving : T.createLink}
-        </button>
-      )}
-    </section>
   );
 }
 
@@ -869,6 +653,7 @@ function UnitForm({
         <Field label={T.unitName} value={u.name} onChange={(v) => set("name", v)} placeholder={T.unitNamePh} />
         <Field label={T.tenantName} value={u.tenantName} onChange={(v) => set("tenantName", v)} />
         <Field label={T.tenantPhone} value={u.phone} onChange={(v) => set("phone", v)} placeholder={T.phonePh} type="tel" />
+        <Field label={T.tenantEmail} value={u.email ?? ""} onChange={(v) => set("email", v)} placeholder={T.emailPh} type="email" />
         <NumField label={`${T.monthlyRent} (${currencySymbol()})`} value={u.rent} onChange={(v) => set("rent", v ?? 0)} />
       </section>
 
@@ -1246,6 +1031,13 @@ function BillView({
   const st = statusStyle(status(bill));
   const bal = balance(bill);
 
+  // Ready-made links that open each app with the bill text filled in.
+  const enc = encodeURIComponent(msg);
+  const whatsappHref = `https://wa.me/${waNumber(unit.phone, data.settings.currency)}?text=${enc}`;
+  const viberHref = `viber://forward?text=${enc}`;
+  const emailSubject = `${T.bill.heading} ${summary.billNo} — ${unit.name} — ${summary.month}`;
+  const emailHref = `mailto:${(unit.email ?? "").trim()}?subject=${encodeURIComponent(emailSubject)}&body=${enc}`;
+
   async function share() {
     if (navigator.share) {
       try {
@@ -1258,19 +1050,9 @@ function BillView({
     }
   }
   async function copy() {
-    // navigator.clipboard only exists on HTTPS; fall back for local-network testing.
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(msg);
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = msg;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
+    if (!(await copyText(msg))) return;
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), 2500);
   }
 
   async function sendImage() {
@@ -1416,21 +1198,37 @@ function BillView({
         {imgBusy ? T.creatingImage : T.sendImage(photoList.length > 0)}
       </button>
 
-      <div className="grid grid-cols-3 gap-2 text-sm">
-        {unit.phone ? (
-          <a href={smsHref} className="rounded-lg bg-slate-900 py-3 text-center font-medium text-white">
-            💬 SMS
+      <section className="space-y-2 rounded-xl bg-white p-4 shadow-sm">
+        <h3 className="font-semibold">{T.sendBillText}</h3>
+        <button
+          onClick={copy}
+          className={`w-full rounded-lg py-3 font-semibold text-white ${copied ? "bg-emerald-600" : "bg-blue-600"}`}
+        >
+          {copied ? T.copiedPaste : T.copyForMessenger}
+        </button>
+        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+          <a href={whatsappHref} target="_blank" rel="noopener noreferrer" className="rounded-lg bg-[#25D366] py-3 text-center font-medium text-white">
+            WhatsApp
           </a>
-        ) : (
-          <span className="rounded-lg bg-slate-200 py-3 text-center text-slate-500">{T.noNumber}</span>
-        )}
-        <button onClick={share} className="rounded-lg bg-blue-600 py-3 font-medium text-white">
-          {T.text}
-        </button>
-        <button onClick={copy} className="rounded-lg border border-slate-300 bg-white py-3 font-medium">
-          {copied ? T.copied : T.copy}
-        </button>
-      </div>
+          <a href={viberHref} className="rounded-lg bg-[#7360F2] py-3 text-center font-medium text-white">
+            Viber
+          </a>
+          <a href={emailHref} className="rounded-lg bg-slate-700 py-3 text-center font-medium text-white">
+            ✉️ Email
+          </a>
+          {unit.phone ? (
+            <a href={smsHref} className="rounded-lg bg-slate-900 py-3 text-center font-medium text-white">
+              💬 SMS
+            </a>
+          ) : (
+            <span className="rounded-lg bg-slate-200 py-3 text-center text-slate-500">{T.noNumber}</span>
+          )}
+          <button onClick={share} className="col-span-2 rounded-lg border border-slate-300 bg-white py-3 font-medium sm:col-span-2">
+            {T.moreApps}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">{T.sendHelp}</p>
+      </section>
 
       <button
         onClick={() => setView({ name: "editBill", billId: bill.id })}
@@ -1774,6 +1572,33 @@ function Stat({ label, value, cls = "" }: { label: string; value: string; cls?: 
       <p className={`text-sm font-bold ${cls}`}>{value}</p>
     </div>
   );
+}
+
+/** Copy text to the clipboard; navigator.clipboard only exists on HTTPS, so fall back for local-network testing. */
+async function copyText(text: string) {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Mobile number as international digits for wa.me (09171234567 → 639171234567); empty lets WhatsApp ask for the contact. */
+function waNumber(phone: string, currency: Settings["currency"]) {
+  const d = phone.replace(/\D/g, "");
+  if (currency === "PHP" && d.startsWith("0")) return `63${d.slice(1)}`;
+  if (currency === "USD" && d.length === 10) return `1${d}`;
+  return d;
 }
 
 function Field({
